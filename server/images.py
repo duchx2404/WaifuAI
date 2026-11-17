@@ -61,9 +61,19 @@ def build_workflow(positive, negative, seed, lora_name="", lora_strength=0.8):
     return wf
 
 
+async def ensure_checkpoint():
+    """Chưa chọn checkpoint thì tự lấy cái đầu tiên ComfyUI đang có (cho lần chạy đầu sau khi cài)."""
+    opts = await options()
+    if opts and opts.get("checkpoints"):
+        db.save_setting("checkpoint", opts["checkpoints"][0])
+
+
 async def generate(character, scene, seed=None):
     """Vẽ một ảnh, lưu vào data/images, trả về tên file."""
     s = settings.get()
+    if not s["checkpoint"]:
+        await ensure_checkpoint()
+        s = settings.get()
     base = s["comfy_url"]
     positive, negative = build_prompts(character, scene)
     if seed is None:
