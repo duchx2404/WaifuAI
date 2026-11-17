@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS characters (
     avatar_error TEXT NOT NULL DEFAULT '',
     mood TEXT NOT NULL DEFAULT 'bình thường',
     mood_reason TEXT NOT NULL DEFAULT '',
+    pinned INTEGER NOT NULL DEFAULT 0,
     proactive_enabled INTEGER NOT NULL DEFAULT 1,
     silence_minutes INTEGER NOT NULL DEFAULT 180,
     explicit_turns INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +102,17 @@ def init():
     _conn.execute("PRAGMA foreign_keys=ON")
     _conn.executescript(SCHEMA)
     _conn.commit()
+    _nang_cap()
+
+
+def _nang_cap():
+    """Thêm cột mới vào cơ sở dữ liệu đã tạo từ bản cũ."""
+    them = {"characters": {"pinned": "INTEGER NOT NULL DEFAULT 0"}}
+    for bang, cot in them.items():
+        co = {r["name"] for r in q(f"PRAGMA table_info({bang})")}
+        for ten, kieu in cot.items():
+            if ten not in co:
+                ex(f"ALTER TABLE {bang} ADD COLUMN {ten} {kieu}")
 
 
 def now():
@@ -135,6 +147,7 @@ def _char_out(row):
         row["sample_messages"] = []
     row["explicit_enabled"] = bool(row["explicit_enabled"])
     row["proactive_enabled"] = bool(row["proactive_enabled"])
+    row["pinned"] = bool(row.get("pinned"))
     return row
 
 

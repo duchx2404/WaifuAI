@@ -152,6 +152,17 @@ def delete_char(cid: int):
     return {"ok": True}
 
 
+@app.post("/api/characters/{cid}/pin")
+def pin_char(cid: int, data: dict = Body(default={})):
+    """Ghim / bỏ ghim hội thoại để nó nằm trên đầu danh sách Chat."""
+    c = _char_or_404(cid)
+    want = data.get("pinned")
+    if want is None:
+        want = not c["pinned"]
+    db.update_character(cid, {"pinned": 1 if want else 0})
+    return db.get_character(cid)
+
+
 @app.get("/api/characters/{cid}/export")
 def export_char(cid: int):
     _char_or_404(cid)

@@ -43,23 +43,49 @@
         h("a", { class: "btn primary", href: "/admin" }, "Tạo nhân vật")));
       return;
     }
-    // xếp theo thời gian tin cuối (tin nhập từ IdolAI có id mới nhưng ngày cũ)
+    // Ghim lên đầu; trong mỗi nhóm xếp theo thời gian tin cuối
+    // (tin nhập từ IdolAI có id mới nhưng ngày cũ nên không xếp theo id)
     const key = (c) => (c.last_message ? c.last_message.created_at : "");
-    const sorted = [...st.chars].sort((a, b) => key(b).localeCompare(key(a)) || b.id - a.id);
+    const theoTin = (a, b) => key(b).localeCompare(key(a)) || b.id - a.id;
+    const ghim = st.chars.filter((c) => c.pinned).sort(theoTin);
+    const thuong = st.chars.filter((c) => !c.pinned).sort(theoTin);
+    const sorted = ghim.concat(thuong);
     for (const c of sorted) {
+      if (ghim.length && thuong.length && c === thuong[0]) rosterEl.append(h("div", { class: "r-sep" }));
       const last = c.last_message;
       const unread = last && last.role === "assistant" && last.id > (st.seen[c.id] || 0) && c.id !== st.active;
       let preview = c.busy ? "đang nhập..." : last ? (last.role === "user" ? "Bạn: " : "") + (last.content || (last.image_path ? "📷 Ảnh" : "")) : "Chưa có tin nhắn";
-      rosterEl.append(h("button", {
-        class: "r-item" + (c.id === st.active ? " active" : "") + (unread ? " unread" : ""),
-        onclick: () => openChat(c.id),
+      const row = h("button", {
+        class: "r-item" + (c.id === st.active ? " active" : "") + (unread ? " unread" : "") + (c.pinned ? " pinned" : ""),
+        onclick: () => { if (row.dataset.lp) { delete row.dataset.lp; return; } openChat(c.id); },
+        oncontextmenu: (e) => { e.preventDefault(); menuGhim(c, e.clientX, e.clientY); },
       },
         h("span", { class: "r-av" }, UI.avatar(c, 48), h("span", { class: "r-mood" }, UI.MOOD_EMOJI[c.mood] || "")),
         h("span", { class: "r-body" },
-          h("span", { class: "r-top" }, h("span", { class: "r-name" }, c.name), last ? h("span", { class: "r-time" }, shortTime(last.created_at)) : ""),
+          h("span", { class: "r-top" },
+            c.pinned ? h("span", { class: "r-pin", "aria-label": "đã ghim" }, "📌") : "",
+            h("span", { class: "r-name" }, c.name),
+            last ? h("span", { class: "r-time" }, shortTime(last.created_at)) : ""),
           h("span", { class: "r-last" }, preview)),
-        unread ? h("span", { class: "r-badge" }) : ""));
+        unread ? h("span", { class: "r-badge" }) : "");
+      UI.longPress(row, (x, y) => menuGhim(c, x, y));
+      rosterEl.append(row);
     }
+  }
+
+  function menuGhim(c, x, y) {
+    UI.menu(x, y, [{
+      icon: "📌",
+      label: c.pinned ? "Bỏ ghim" : "Ghim lên đầu",
+      onClick: async () => {
+        try {
+          const moi = await api("POST", `/api/characters/${c.id}/pin`, { pinned: !c.pinned });
+          c.pinned = moi.pinned;
+          renderRoster();
+          toast(moi.pinned ? `Đã ghim ${c.name}` : `Đã bỏ ghim ${c.name}`, "ok");
+        } catch (e) { toast(e.message, "bad"); }
+      },
+    }]);
   }
 
   // ---------- mở cuộc trò chuyện ----------

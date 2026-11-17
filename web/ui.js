@@ -156,6 +156,55 @@
     return api;
   };
 
+  // ---------- menu chuột phải (tự vẽ, không dùng menu của trình duyệt) ----------
+  let openMenu = null;
+  UI.menu = (x, y, items) => {
+    if (openMenu) openMenu();
+    const box = UI.h("div", { class: "ctxmenu", role: "menu" });
+    const close = () => { box.remove(); document.removeEventListener("mousedown", onOut, true);
+      document.removeEventListener("keydown", onKey, true); window.removeEventListener("resize", close);
+      if (openMenu === close) openMenu = null; };
+    const onOut = (e) => { if (!box.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
+    for (const it of items) {
+      if (!it) continue;
+      box.append(UI.h("button", {
+        class: "ctxitem" + (it.danger ? " danger" : ""), type: "button", role: "menuitem",
+        onclick: () => { close(); it.onClick(); },
+      }, it.icon ? UI.h("span", { class: "ic" }, it.icon) : "", it.label));
+    }
+    document.body.append(box);
+    const r = box.getBoundingClientRect();
+    box.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
+    box.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
+    document.addEventListener("mousedown", onOut, true);
+    document.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", close);
+    openMenu = close;
+    return close;
+  };
+
+  // Nhấn giữ trên điện thoại = chuột phải. onFire(x, y) chạy khi giữ đủ lâu.
+  UI.longPress = (el, onFire, ms = 450) => {
+    let timer = null, sx = 0, sy = 0;
+    const huy = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    el.addEventListener("touchstart", (e) => {
+      const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
+      timer = setTimeout(() => {
+        timer = null;
+        el.dataset.lp = "1";              // chặn cú chạm này biến thành click mở chat
+        setTimeout(() => { delete el.dataset.lp; }, 800);
+        onFire(sx, sy);
+      }, ms);
+    }, { passive: true });
+    el.addEventListener("touchmove", (e) => {
+      const t = e.touches[0];
+      if (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10) huy();
+    }, { passive: true });
+    el.addEventListener("touchend", huy);
+    el.addEventListener("touchcancel", huy);
+  };
+
   // ---------- công tắc ----------
   UI.switch = (checked, text, onChange) => {
     const input = UI.h("input", { type: "checkbox" });

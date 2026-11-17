@@ -20,6 +20,11 @@
 .r-last { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r-item.unread .r-last { color: var(--text); font-weight: 600; }
 .r-badge { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex: none; }
+.r-item.pinned { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+.r-item.pinned:hover { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); }
+.r-item.pinned.active { background: var(--panel); }
+.r-pin { font-size: 11px; line-height: 1; flex: none; opacity: .85; }
+.r-sep { height: 1px; margin: 8px 12px; background: var(--line); }
 .r-av { position: relative; flex: none; }
 .r-mood { position: absolute; right: -4px; bottom: -4px; font-size: 15px; line-height: 1; filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)); }
 
