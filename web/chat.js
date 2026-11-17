@@ -1,0 +1,229 @@
+/* Giao diện Chat */
+(function () {
+  const { h, api, toast, esc } = UI;
+  const $ = (id) => document.getElementById(id);
+  const app = $("app"), rosterEl = $("roster"), msgsEl = $("messages"), input = $("input");
+
+  const st = {
+    chars: [],
+    active: null,       // id nhân vật đang mở
+    rev: 0,
+    msgs: new Map(),    // id -> tin nhắn
+    busy: false,
+    sending: false,
+    hasOlder: true,
+    seen: UI.store.get("waifu_seen", {}),
+  };
+
+  // ---------- định dạng ----------
+  const pad = (n) => String(n).padStart(2, "0");
+  const parseTs = (s) => new Date(String(s).replace(" ", "T"));
+  const hm = (s) => { const d = parseTs(s); return isNaN(d) ? "" : pad(d.getHours()) + ":" + pad(d.getMinutes()); };
+  const dayLabel = (s) => {
+    const d = parseTs(s), t = new Date(); if (isNaN(d)) return "";
+    const y = new Date(t); y.setDate(t.getDate() - 1);
+    if (d.toDateString() === t.toDateString()) return "Hôm nay";
+    if (d.toDateString() === y.toDateString()) return "Hôm qua";
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+  };
+  const shortTime = (s) => (dayLabel(s) === "Hôm nay" ? hm(s) : dayLabel(s).replace(/\/\d{4}$/, ""));
+  const richText = (t) => esc(t).replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+
+  // ---------- danh sách nhân vật ----------
+  async function loadRoster() {
+    try { st.chars = await api("GET", "/api/characters"); } catch (e) { return; }
+    renderRoster();
+  }
+
+  function renderRoster() {
+    rosterEl.replaceChildren();
+    if (!st.chars.length) {
+      rosterEl.append(h("div", { class: "empty-state" },
+        h("p", {}, "Chưa có nhân vật nào."),
+        h("a", { class: "btn primary", href: "/admin" }, "Tạo nhân vật")));
+      return;
+    }
+    const sorted = [...st.chars].sort((a, b) => (b.last_message?.id || 0) - (a.last_message?.id || 0));
+    for (const c of sorted) {
+      const last = c.last_message;
+      const unread = last && last.role === "assistant" && last.id > (st.seen[c.id] || 0) && c.id !== st.active;
+      let preview = c.busy ? "đang nhập..." : last ? (last.role === "user" ? "Bạn: " : "") + (last.content || (last.image_path ? "📷 Ảnh" : "")) : "Chưa có tin nhắn";
+      rosterEl.append(h("button", {
+        class: "r-item" + (c.id === st.active ? " active" : "") + (unread ? " unread" : ""),
+        onclick: () => openChat(c.id),
+      },
+        h("span", { class: "r-av" }, UI.avatar(c, 48), h("span", { class: "r-mood" }, UI.MOOD_EMOJI[c.mood] || "")),
+        h("span", { class: "r-body" },
+          h("span", { class: "r-top" }, h("span", { class: "r-name" }, c.name), last ? h("span", { class: "r-time" }, shortTime(last.created_at)) : ""),
+          h("span", { class: "r-last" }, preview)),
+        unread ? h("span", { class: "r-badge" }) : ""));
+    }
+  }
+
+  // ---------- mở cuộc trò chuyện ----------
+  async function openChat(id) {
+    st.active = id; st.rev = 0; st.msgs.clear(); st.hasOlder = true; st.busy = false;
+    UI.store.set("waifu_last_chat", id);
+    app.classList.add("show-thread");
+    $("threadEmpty").classList.add("hidden");
+    ["threadHead", "messages", "composer"].forEach((x) => $(x).classList.remove("hidden"));
+    msgsEl.replaceChildren();
+    renderHead();
+    renderRoster();
+    await poll(true);
+    if (matchMedia("(min-width: 761px)").matches) input.focus();
+  }
+
+  function renderHead(extra) {
+    const c = st.chars.find((x) => x.id === st.active);
+    if (!c) return;
+    $("headAvatar").replaceChildren(UI.avatar(c, 42));
+    $("headName").textContent = c.name;
+    const mood = extra?.mood ?? c.mood, act = extra?.activity ?? c.activity;
+    $("headStatus").replaceChildren(
+      h("span", { class: "chip" }, (UI.MOOD_EMOJI[mood] || "") + " " + mood),
+      act ? h("span", { class: "act" }, act) : "");
+  }
+
+  // ---------- tải tin nhắn ----------
+  async function poll(first = false) {
+    const id = st.active;
+    if (!id) return;
+    let data;
+    try { data = await api("GET", `/api/characters/${id}/messages?rev=${first ? 0 : st.rev}`); }
+    catch (e) { return; }
+    if (id !== st.active) return;
+    const nearBottom = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120;
+    let changed = first;
+    for (const m of data.messages) {
+      const old = st.msgs.get(m.id);
+      if (!old || old.rev !== m.rev) { st.msgs.set(m.id, m); changed = true; }
+    }
+    if (first && data.messages.length < 80) st.hasOlder = false;
+    st.rev = data.rev;
+    if (st.busy !== data.busy) { st.busy = data.busy; changed = true; }
+    renderHead(data);
+    if (changed) { renderMessages(); if (first || nearBottom) scrollBottom(); }
+    markSeen();
+  }
+
+  function markSeen() {
+    const ids = [...st.msgs.keys()];
+    if (!ids.length) return;
+    const max = Math.max(...ids);
+    if ((st.seen[st.active] || 0) < max) { st.seen[st.active] = max; UI.store.set("waifu_seen", st.seen); }
+  }
+
+  async function loadOlder(btn) {
+    const ids = [...st.msgs.keys()];
+    if (!ids.length) return;
+    UI.busy(btn, true);
+    try {
+      const data = await api("GET", `/api/characters/${st.active}/messages/before?before=${Math.min(...ids)}`);
+      if (data.messages.length < 50) st.hasOlder = false;
+      const prevH = msgsEl.scrollHeight;
+      data.messages.forEach((m) => st.msgs.set(m.id, m));
+      renderMessages();
+      msgsEl.scrollTop = msgsEl.scrollHeight - prevH;
+    } catch (e) { toast(e.message, "bad"); UI.busy(btn, false); }
+  }
+
+  function scrollBottom() { msgsEl.scrollTop = msgsEl.scrollHeight; }
+
+  function renderMessages() {
+    const list = [...st.msgs.values()].sort((a, b) => a.id - b.id);
+    const frag = document.createDocumentFragment();
+    if (st.hasOlder && list.length) {
+      const b = h("button", { class: "btn sm load-older" }, "Xem tin cũ hơn");
+      b.addEventListener("click", () => loadOlder(b));
+      frag.append(b);
+    }
+    if (!list.length) frag.append(h("div", { class: "empty-state" }, "Hãy gửi lời chào đầu tiên 💌"));
+    let lastDay = "", prev = null;
+    list.forEach((m, i) => {
+      const day = dayLabel(m.created_at);
+      if (day !== lastDay) { frag.append(h("div", { class: "day-sep" }, day)); lastDay = day; prev = null; }
+      const side = m.role === "user" ? "me" : m.role === "system" ? "system" : "her";
+      const next = list[i + 1];
+      const lastOfGroup = !next || next.role !== m.role || dayLabel(next.created_at) !== day;
+      const el = h("div", { class: `msg ${side}` + (prev && prev.role !== m.role ? " gap" : "") });
+      if (m.content) el.append(h("div", { class: "bubble", html: richText(m.content) }));
+      el.append(...photoNodes(m));
+      if (lastOfGroup && side !== "system") el.append(h("div", { class: "time" }, hm(m.created_at)));
+      frag.append(el);
+      prev = m;
+    });
+    if (st.busy) frag.append(h("div", { class: "typing", "aria-label": "đang nhập" }, h("i"), h("i"), h("i")));
+    msgsEl.replaceChildren(frag);
+  }
+
+  function photoNodes(m) {
+    if (m.image_status === "done" && m.image_path) {
+      const src = "/images/" + encodeURIComponent(m.image_path);
+      const img = h("img", { src, alt: "Ảnh", loading: "lazy" });
+      img.addEventListener("click", () => UI.lightbox(src));
+      return [h("div", { class: "photo" }, img)];
+    }
+    if (m.image_status === "pending") return [h("div", { class: "photo pending" }, h("span", {}, "📷 Đang chụp ảnh..."))];
+    if (m.image_status === "error") {
+      const b = h("button", { class: "btn sm" }, "Thử lại");
+      b.addEventListener("click", async () => {
+        UI.busy(b, true);
+        try { await api("POST", `/api/messages/${m.id}/retry-image`); poll(); }
+        catch (e) { toast(e.message, "bad"); UI.busy(b, false); }
+      });
+      return [h("div", { class: "photo-fail" }, "Ảnh gửi lỗi.", b)];
+    }
+    if (m.image_status === "blocked") return [h("div", { class: "photo-fail" }, "🚫 Ảnh này bị chặn bởi bộ lọc tuổi.")];
+    return [];
+  }
+
+  // ---------- gửi tin ----------
+  async function send(wantPhoto = false) {
+    const text = input.value.trim();
+    if (!st.active || st.sending || (!text && !wantPhoto)) return;
+    if (st.busy) { toast("Đợi nhân vật trả lời xong đã nhé"); return; }
+    st.sending = true;
+    const cid = st.active;
+    input.value = ""; autoGrow();
+    $("sendBtn").disabled = true; $("photoBtn").disabled = true;
+    const kick = setTimeout(() => poll(), 350); // hiện tin của mình + "đang nhập..." ngay
+    try {
+      await api("POST", `/api/characters/${cid}/messages`, { text, want_photo: wantPhoto });
+    } catch (e) {
+      toast(e.message, "bad");
+      if (!input.value) input.value = text;
+    } finally {
+      clearTimeout(kick);
+      st.sending = false;
+      $("sendBtn").disabled = false; $("photoBtn").disabled = false;
+      if (cid === st.active) await poll();
+      loadRoster();
+    }
+  }
+
+  function autoGrow() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight + 2, 160) + "px"; }
+
+  $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(); });
+  $("photoBtn").addEventListener("click", () => send(true));
+  input.addEventListener("input", autoGrow);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(min-width: 761px)").matches) { e.preventDefault(); send(); }
+  });
+  $("backBtn").addEventListener("click", () => {
+    app.classList.remove("show-thread");
+    st.active = null;
+    renderRoster();
+  });
+
+  // ---------- chạy ----------
+  (async () => {
+    await loadRoster();
+    const last = UI.store.get("waifu_last_chat", null);
+    const wide = matchMedia("(min-width: 761px)").matches;
+    if (wide && st.chars.some((c) => c.id === last)) openChat(last);
+    else if (wide && st.chars.length) openChat(st.chars[0].id);
+  })();
+  setInterval(() => { if (!document.hidden) poll(); }, 2500);
+  setInterval(() => { if (!document.hidden) loadRoster(); }, 8000);
+})();
