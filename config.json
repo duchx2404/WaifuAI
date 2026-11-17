@@ -1,4 +1,6 @@
 {
   "host": "127.0.0.1",
-  "port": 8600
+  "port": 8600,
+  "model_chat": "huihui_ai/gemma-4-abliterated:12b",
+  "model_explicit": "huihui_ai/gemma-4-abliterated:12b"
 }

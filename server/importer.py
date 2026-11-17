@@ -5,16 +5,10 @@ import datetime as dt
 import json
 import uuid
 
-from . import db, safety
+from . import dates, db, safety
 
 MOOD_MAP = [("vui", "vui"), ("hao_hung", "hào hứng"), ("doi", "dỗi"), ("hon", "dỗi"), ("buon", "buồn"),
             ("nho", "nhớ nhung"), ("met", "mệt"), ("ngai", "ngại ngùng")]
-
-
-def _join(v):
-    if isinstance(v, list):
-        return "; ".join(_text(x) for x in v if _text(x))
-    return _text(v)
 
 
 def _text(x):
@@ -50,15 +44,20 @@ def _ts(v):
     return db.now()
 
 
+def _lines_of(v):
+    """Danh sách / chuỗi → mỗi ý một dòng."""
+    items = v if isinstance(v, list) else [v]
+    return "\n".join(t for t in (_text(x) for x in items) if t)
+
+
+# khoá trong characterBible của IdolAI → ô đặc điểm của WaifuAI
+IDOL_NOTES = {"likes": "likes", "dislikes": "dislikes", "quirks": "quirks", "speechTics": "speech_style",
+              "backstory": "backstory", "ongoingArc": "ongoing", "petsAndCompanions": "companions"}
+
+
 def _from_idol(p):
     bible = p.get("characterBible") or {}
-    notes = []
-    for key, label in (("likes", "Thích"), ("dislikes", "Không thích"), ("quirks", "Thói quen"),
-                       ("speechTics", "Cách nhắn tin"), ("backstory", "Quá khứ"), ("ongoingArc", "Đang diễn ra"),
-                       ("petsAndCompanions", "Thú cưng / người thân")):
-        val = _join(bible.get(key))
-        if val:
-            notes.append(f"{label}: {val}")
+    notes = {ours: _lines_of(bible.get(theirs)) for theirs, ours in IDOL_NOTES.items()}
     mood_raw = str((p.get("emotionState") or {}).get("mood") or "")
     mood = next((v for k, v in MOOD_MAP if k in mood_raw), "bình thường")
     return {
@@ -68,7 +67,8 @@ def _from_idol(p):
         "personality": p.get("companionPersonality") or "",
         "appearance": p.get("companionAppearance") or "",
         "bio": p.get("idolBio") or _text(bible.get("identityAndStage")),
-        "extra_notes": "\n".join(notes),
+        "extra_notes": "",
+        **notes,
         "user_profile": p.get("userCurrentState") or "",
         "relationship": p.get("relationship") or "",
         "pronoun_rule": p.get("pronounRule") or "",
@@ -94,10 +94,19 @@ def _create(fields, memories=(), history=(), avatar_url="", schedule=()):
     for key in ("appearance", "appearance_tags"):
         safety.check(fields.get(key, ""), f"Ngoại hình của '{fields.get('name')}'")
     fields["age"] = max(int(fields.get("age") or 23), safety.MIN_AGE)
+    tuoi = dates.age_on(fields.get("birthday"), dt.date.today())
+    if tuoi is not None:
+        if tuoi < safety.MIN_AGE:
+            fields.pop("birthday")  # ngày sinh làm nhân vật dưới 21 tuổi: bỏ, giữ tuổi tối thiểu
+        else:
+            fields["age"] = tuoi
+    if fields.get("extra_notes") and not any(fields.get(k) for k, _ in db.NOTE_FIELDS):
+        fields.update(db.split_notes(fields["extra_notes"]))  # file xuất bản cũ: ghi chú còn gộp
     cid = db.create_character(db.coerce_char_fields(fields))
     avatar = _save_data_url(avatar_url, cid)
     if avatar:
-        db.update_character(cid, {"avatar_path": avatar, "avatar_status": "done"})
+        # ảnh đến từ ngoài (không biết nguồn) → không bao giờ dùng làm mặt mẫu PuLID
+        db.update_character(cid, {"avatar_path": avatar, "avatar_status": "done", "avatar_source": "import"})
     for m in memories:
         db.add_memory(cid, m, "import")
     for h in history:

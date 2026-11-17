@@ -11,7 +11,8 @@
 [CmdletBinding()]
 param(
   [string]$ThuMucComfy = "",
-  [string]$CheckpointUrl = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+  # LUSTIFY v2.0 (SDXL tinh chỉnh ảnh tả thực, vẽ được cảnh nóng) — bản sao trên HF, SHA256 khớp Civitai
+  [string]$CheckpointUrl = "https://huggingface.co/shootstuff/LUSTIFY-v2.0/resolve/main/lustifySDXLNSFWSFW_v20.safetensors",
   [string]$CheckpointTen = "",
   [string]$MoHinhChat = "gemma3:12b",
   [string]$MoHinhNong = "mistral-nemo:12b",
@@ -26,9 +27,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:Loi = @()
 $script:BoQua = @()
+# Người dùng tự chỉ định mô hình thì phải đúng tên đó, không thay bằng mô hình cùng họ
+$script:TuChonChat = $PSBoundParameters.ContainsKey("MoHinhChat")
+$script:TuChonNong = $PSBoundParameters.ContainsKey("MoHinhNong")
 
 # ---------------------------------------------------------------- tiện ích
 
@@ -95,9 +100,20 @@ function TaiFile($url, $dich, $tenHienThi) {
 }
 
 function DungLuongTrong($duongDan) {
-  $o = (Get-Item $duongDan).PSDrive.Name + ":"
+  $p = $duongDan
+  while ($p -and -not (Test-Path $p)) { $p = Split-Path -Parent $p }
+  if (-not $p) { return 0 }
+  $o = (Get-Item $p).PSDrive.Name + ":"
   $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$o'"
   return [math]::Round($d.FreeSpace / 1GB, 1)
+}
+
+# Đủ chỗ thì true; thiếu thì ghi lỗi rồi false — để không tải dở làm đầy ổ đĩa
+function DuCho($duongDan, $canGB, $viecGi) {
+  $trong = DungLuongTrong $duongDan
+  if ($trong -ge $canGB) { return $true }
+  Hong "Không đủ chỗ để $viecGi`: $duongDan (ổ $($duongDan.Substring(0, 2))) còn $trong GB, cần khoảng $canGB GB. Bỏ qua."
+  return $false
 }
 
 # ---------------------------------------------------------------- bắt đầu
@@ -109,7 +125,14 @@ Write-Host "   $Root" -ForegroundColor DarkGray
 if ($KiemTra) { Write-Host "   CHE DO XEM TRUOC - khong cai, khong tai gi" -ForegroundColor Yellow }
 
 if (-not $CheckpointTen) { $CheckpointTen = Split-Path -Leaf ($CheckpointUrl -split "\?")[0] }
-if (-not $ThuMucComfy) { $ThuMucComfy = Join-Path (Split-Path -Parent $Root) "ComfyUI_windows_portable" }
+if (-not $ThuMucComfy) {
+  # Máy đã có ComfyUI portable ở gốc ổ nào đó thì dùng luôn, không cài thêm bản thứ hai
+  # Ưu tiên bản ở gốc ổ (thường là bản người dùng tự cài từ trước), sau mới đến bản cạnh WaifuAI
+  $ungVien = @(Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root "ComfyUI_windows_portable" })
+  $ungVien += @(Join-Path (Split-Path -Parent $Root) "ComfyUI_windows_portable")
+  $ThuMucComfy = $ungVien | Where-Object { Test-Path (Join-Path $_ "ComfyUI\main.py") } | Select-Object -First 1
+  if (-not $ThuMucComfy) { $ThuMucComfy = $ungVien[-1] }
+}
 
 # ---------------------------------------------------------------- 1. máy
 
@@ -191,6 +214,35 @@ function OllamaSong {
   catch { return $false }
 }
 
+# Tên các mô hình đang có (cột đầu của `ollama list`)
+function DsMoHinh {
+  $dong = @(& ollama list | Select-Object -Skip 1)
+  return @($dong | ForEach-Object { ($_.Trim() -split '\s+')[0] } | Where-Object { $_ })
+}
+
+# Họ mô hình: "gemma3:12b" -> "gemma", "huihui_ai/gemma-4-abliterated:12b" -> "gemma"
+function HoMoHinh($ten) {
+  $goc = (($ten -split ':')[0] -split '/')[-1]
+  if ($goc -match '^[A-Za-z]+') { return $Matches[0].ToLower() }
+  return $goc.ToLower()
+}
+
+$KhongKiemDuyet = 'abliterat|uncensor|nsfw|lewd|erotic'
+$script:ChatDung = $null
+$script:NongDung = $null
+
+function KeoMoHinh($m) {
+  $thu = [Environment]::GetEnvironmentVariable("OLLAMA_MODELS", "User")
+  if (-not $thu) { $thu = [Environment]::GetEnvironmentVariable("OLLAMA_MODELS", "Machine") }
+  if (-not $thu) { $thu = Join-Path $env:USERPROFILE ".ollama\models" }
+  if (-not (DuCho $thu 10 "tải mô hình $m")) { return $false }
+  Write-Host "      Đang tải mô hình $m (vài GB, xem tiến độ bên dưới)..." -ForegroundColor Gray
+  & ollama pull $m
+  if ($LASTEXITCODE -ne 0) { Hong "Tải mô hình $m thất bại"; return $false }
+  Ok "Đã tải $m"
+  return $true
+}
+
 if (-not $BoQuaOllama) { Lam "chạy Ollama và tải mô hình" {
   if (-not (OllamaSong)) {
     Tin "Khởi động Ollama..."
@@ -202,15 +254,35 @@ if (-not $BoQuaOllama) { Lam "chạy Ollama và tải mô hình" {
   }
   if (OllamaSong) {
     Ok "Ollama đang chạy"
-    $daCo = (& ollama list | Out-String)
-    foreach ($m in @($MoHinhChat, $MoHinhNong)) {
-      if ($daCo -match [regex]::Escape($m)) {
-        Ok "Đã có mô hình $m"
-      } else {
-        Write-Host "      Đang tải mô hình $m (vài GB, xem tiến độ bên dưới)..." -ForegroundColor Gray
-        & ollama pull $m
-        if ($LASTEXITCODE -ne 0) { Hong "Tải mô hình $m thất bại" } else { Ok "Đã tải $m" }
+    $co = DsMoHinh
+
+    # Mô hình trò chuyện: đúng tên -> dùng; không thì mô hình cùng họ đã có (gemma3 ~ gemma-4...) -> dùng; cuối cùng mới tải
+    if ($co -contains $MoHinhChat) {
+      Ok "Đã có mô hình $MoHinhChat"; $script:ChatDung = $MoHinhChat
+    } else {
+      $cungHo = @()
+      if (-not $script:TuChonChat) {
+        $cungHo = @($co | Where-Object { (HoMoHinh $_) -eq (HoMoHinh $MoHinhChat) })
       }
+      if ($cungHo.Count -gt 0) {
+        $script:ChatDung = $cungHo[0]
+        Ok "Không có $MoHinhChat nhưng đã có $($cungHo[0]) cùng họ - dùng luôn, không tải thêm"
+      } elseif (KeoMoHinh $MoHinhChat) { $script:ChatDung = $MoHinhChat }
+    }
+
+    # Mô hình cảnh nóng: mô hình chat đã là bản bỏ kiểm duyệt thì dùng chung, không tải thêm
+    if ($script:ChatDung -and $script:ChatDung -match $KhongKiemDuyet) {
+      $script:NongDung = $script:ChatDung
+      Ok "$($script:ChatDung) là bản bỏ kiểm duyệt - dùng luôn cho cảnh nóng, không tải $MoHinhNong"
+    } elseif ($co -contains $MoHinhNong) {
+      Ok "Đã có mô hình $MoHinhNong"; $script:NongDung = $MoHinhNong
+    } else {
+      $boKD = @()
+      if (-not $script:TuChonNong) { $boKD = @($co | Where-Object { $_ -match $KhongKiemDuyet }) }
+      if ($boKD.Count -gt 0) {
+        $script:NongDung = $boKD[0]
+        Ok "Đã có $($boKD[0]) (bỏ kiểm duyệt) - dùng cho cảnh nóng, không tải $MoHinhNong"
+      } elseif (KeoMoHinh $MoHinhNong) { $script:NongDung = $MoHinhNong }
     }
   } else {
     Hong "Không khởi động được Ollama. Mở app Ollama thủ công rồi chạy lại bộ cài."
@@ -230,7 +302,7 @@ if ($BoQuaComfy) {
   Ok "Đã có ComfyUI: $ThuMucComfy"
 } else {
   Tin "Sẽ cài ComfyUI vào: $ThuMucComfy"
-  Lam "tải và giải nén ComfyUI (khoảng 2 GB)" {
+  if (DuCho $ThuMucComfy 8 "cài ComfyUI") { Lam "tải và giải nén ComfyUI (khoảng 2 GB)" {
     $cha = Split-Path -Parent $ThuMucComfy
     if (-not (Test-Path $cha)) { New-Item -ItemType Directory -Path $cha -Force | Out-Null }
     $z7 = Join-Path $env:TEMP "7zr.exe"
@@ -244,26 +316,49 @@ if ($BoQuaComfy) {
     if ($LASTEXITCODE -ne 0) { throw "Giải nén ComfyUI thất bại" }
     Remove-Item $goi -Force -ErrorAction SilentlyContinue
     if (Test-Path $comfyMain) { Ok "Đã cài ComfyUI" } else { throw "Giải nén xong nhưng không thấy $comfyMain" }
-  }
+  } }
 }
 
-$thuMucCkpt = Join-Path $ThuMucComfy "ComfyUI\models\checkpoints"
-$fileCkpt = Join-Path $thuMucCkpt $CheckpointTen
+# Các thư mục checkpoint ComfyUI đọc: models\checkpoints + những chỗ khai trong extra_model_paths.yaml
+function ThuMucCheckpoint {
+  $ds = @(Join-Path $ThuMucComfy "ComfyUI\models\checkpoints")
+  $yaml = Join-Path $ThuMucComfy "ComfyUI\extra_model_paths.yaml"
+  if (Test-Path $yaml) {
+    $goc = ""
+    foreach ($d in (Get-Content $yaml -Encoding UTF8)) {
+      if ($d -match '^\S') { $goc = "" }
+      if ($d -match '^\s+base_path:\s*(.+?)\s*$') {
+        $goc = $Matches[1].Trim('"', "'")
+      } elseif ($d -match '^\s+checkpoints:\s*([^|\s].*?)\s*$') {
+        $p = $Matches[1].Trim('"', "'")
+        if (-not [System.IO.Path]::IsPathRooted($p) -and $goc) { $p = Join-Path $goc $p }
+        $ds += $p
+      }
+    }
+  }
+  return $ds
+}
+
+$dsCkpt = @(ThuMucCheckpoint)
+$thuMucCkpt = $dsCkpt[0]
 if ($BoQuaComfy -or $BoQuaCheckpoint) {
   if ($BoQuaCheckpoint) { Canh "Bỏ qua tải checkpoint theo yêu cầu. Tự chép file .safetensors vào $thuMucCkpt" }
-} elseif (Test-Path $fileCkpt) {
-  Ok "Đã có checkpoint $CheckpointTen"
 } else {
-  $khac = @()
-  if (Test-Path $thuMucCkpt) { $khac = @(Get-ChildItem $thuMucCkpt -Filter *.safetensors -ErrorAction SilentlyContinue) }
+  $khac = @($dsCkpt | Where-Object { Test-Path $_ } |
+            ForEach-Object { Get-ChildItem $_ -Filter *.safetensors -ErrorAction SilentlyContinue })
   if ($khac.Count -gt 0) {
-    Ok "Đã có sẵn checkpoint: $($khac[0].Name) - không tải thêm"
+    Ok "Đã có sẵn checkpoint: $($khac[0].FullName) - không tải thêm"
   } else {
-    Lam "tải checkpoint SDXL (khoảng 6.9 GB)" {
-      if (-not (Test-Path $thuMucCkpt)) { New-Item -ItemType Directory -Path $thuMucCkpt -Force | Out-Null }
-      TaiFile $CheckpointUrl $fileCkpt "$CheckpointTen (6.9 GB)"
-      Ok "Đã tải $CheckpointTen"
+    # Tải vào thư mục checkpoint nằm trên ổ còn trống nhiều nhất
+    $coSan = @($dsCkpt | Where-Object { Test-Path (Split-Path -Parent $_) })
+    if ($coSan.Count -gt 0) {
+      $thuMucCkpt = $coSan | Sort-Object { DungLuongTrong $_ } -Descending | Select-Object -First 1
     }
+    if (DuCho $thuMucCkpt 9 "tải checkpoint SDXL") { Lam "tải checkpoint SDXL (khoảng 6.5 GB) vào $thuMucCkpt" {
+      if (-not (Test-Path $thuMucCkpt)) { New-Item -ItemType Directory -Path $thuMucCkpt -Force | Out-Null }
+      TaiFile $CheckpointUrl (Join-Path $thuMucCkpt $CheckpointTen) "$CheckpointTen (6.5 GB)"
+      Ok "Đã tải $CheckpointTen"
+    } }
   }
 }
 
@@ -272,9 +367,18 @@ if ($BoQuaComfy -or $BoQuaCheckpoint) {
 Tieu 5 "Cấu hình WaifuAI"
 
 Lam "ghi config.json (host 0.0.0.0, cổng $Cong)" {
-  $cfg = @{ host = "0.0.0.0"; port = $Cong } | ConvertTo-Json
-  GhiFile (Join-Path $Root "config.json") $cfg
+  $cfgPath = Join-Path $Root "config.json"
+  $cfg = [ordered]@{}
+  if (Test-Path $cfgPath) {
+    try { (Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value } } catch { }
+  }
+  $cfg["host"] = "0.0.0.0"
+  $cfg["port"] = $Cong
+  if ($script:ChatDung) { $cfg["model_chat"] = $script:ChatDung }
+  if ($script:NongDung) { $cfg["model_explicit"] = $script:NongDung }
+  GhiFile $cfgPath ($cfg | ConvertTo-Json)
   Ok "config.json: mở cho máy khác trong mạng, cổng $Cong"
+  if ($script:ChatDung) { Tin "Mô hình trò chuyện: $($script:ChatDung) / cảnh nóng: $($script:NongDung)" }
 }
 
 Lam "ghi chay.bat" {

@@ -42,7 +42,15 @@ async def chat(messages, model=None, schema=None, temperature=None):
         raise LLMError(f"Không kết nối được Ollama ({s['ollama_url']}): {e}") from e
     if r.status_code != 200:
         raise LLMError(f"Ollama trả lỗi {r.status_code}: {r.text[:300]}")
-    return strip_think(r.json().get("message", {}).get("content", ""))
+    j = r.json()
+    # số token + lý do dừng của lần gọi gần nhất (ghi vào nhật ký: "length" = bị cắt vì hết chỗ)
+    last_meta.clear()
+    last_meta.update({"prompt_tokens": j.get("prompt_eval_count"), "output_tokens": j.get("eval_count"),
+                      "done_reason": j.get("done_reason"), "num_ctx": body["options"]["num_ctx"]})
+    return strip_think(j.get("message", {}).get("content", ""))
+
+
+last_meta = {}
 
 
 def parse_json(raw):

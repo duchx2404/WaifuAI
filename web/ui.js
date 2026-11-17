@@ -24,6 +24,10 @@
     try { res = await fetch(url, opt); } catch (e) { throw new Error("Không kết nối được máy chủ WaifuAI"); }
     let data = null;
     try { data = await res.json(); } catch (e) { /* không có JSON */ }
+    if (res.status === 401) {  // hết phiên đăng nhập
+      location.href = "/login?next=" + encodeURIComponent(location.pathname + location.hash);
+      throw new Error("Cần đăng nhập");
+    }
     if (!res.ok) throw new Error((data && (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail))) || `Lỗi ${res.status}`);
     return data;
   };
@@ -230,6 +234,35 @@
       const hh = Math.min(23, +m[1]), mm = Math.min(59, +(m[2] || 0));
       el.value = String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
     });
+    return el;
+  };
+
+  // ---------- ô ngày dd/mm/yyyy (gõ số, tự chèn dấu /); giá trị trao đổi dạng ISO yyyy-mm-dd ----------
+  UI.isoToDmy = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); return m ? `${m[3]}/${m[2]}/${m[1]}` : ""; };
+  UI.dmyToIso = (s) => {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(s || "").trim());
+    if (!m) return null;
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+    if (d.getFullYear() !== +m[3] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[1]) return null;
+    return `${m[3]}-${String(+m[2]).padStart(2, "0")}-${String(+m[1]).padStart(2, "0")}`;
+  };
+  UI.dateInput = (iso = "", onChange = null, attrs = {}) => {
+    const el = UI.h("input", { class: "input date-input", inputmode: "numeric", maxlength: "10", placeholder: "dd/mm/yyyy", autocomplete: "off", ...attrs });
+    el.value = UI.isoToDmy(iso);
+    const report = () => {
+      const v = el.value.trim();
+      const out = v === "" ? "" : UI.dmyToIso(v);
+      el.classList.toggle("bad", out === null && v.length === 10);
+      if (out !== null && onChange) onChange(out);
+    };
+    el.addEventListener("input", () => {
+      let d = el.value.replace(/\D/g, "").slice(0, 8);
+      if (d.length > 4) d = d.slice(0, 2) + "/" + d.slice(2, 4) + "/" + d.slice(4);
+      else if (d.length > 2) d = d.slice(0, 2) + "/" + d.slice(2);
+      el.value = d;
+      report();
+    });
+    el.setIso = (v) => { el.value = UI.isoToDmy(v); report(); };
     return el;
   };
 

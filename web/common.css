@@ -102,6 +102,8 @@ button { font: inherit; color: inherit; }
 .textarea { resize: vertical; min-height: 84px; line-height: 1.45; }
 .input:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .input.mono, .textarea.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+/* Safari iOS phóng to trang khi chạm ô nhập có chữ dưới 16px */
+@media (max-width: 760px) { .input, .textarea, .input.mono, .textarea.mono { font-size: 16px; } }
 
 /* ---------- công tắc ---------- */
 .switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }

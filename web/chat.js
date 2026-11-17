@@ -89,7 +89,12 @@
   }
 
   // ---------- mở cuộc trò chuyện ----------
+  const narrow = () => matchMedia("(max-width: 760px)").matches;
+
   async function openChat(id) {
+    // Điện thoại: mở hội thoại = một bước trong lịch sử, để vuốt lùi / nút Back về danh sách (như Messenger)
+    if (narrow() && !(history.state && history.state.thread)) history.pushState({ thread: id }, "");
+    else if (narrow()) history.replaceState({ thread: id }, "");
     st.active = id; st.rev = 0; st.msgs.clear(); st.hasOlder = true; st.busy = false;
     UI.store.set("waifu_last_chat", id);
     app.classList.add("show-thread");
@@ -130,6 +135,7 @@
     if (first && data.messages.length < 80) st.hasOlder = false;
     st.rev = data.rev;
     if (st.busy !== data.busy) { st.busy = data.busy; changed = true; }
+    $("nudgeBtn").disabled = st.busy;
     renderHead(data);
     if (changed) { renderMessages(); if (first || nearBottom) scrollBottom(); }
     markSeen();
@@ -210,12 +216,12 @@
   async function send(wantPhoto = false) {
     const text = input.value.trim();
     if (!st.active || st.sending || (!text && !wantPhoto)) return;
-    if (st.busy) { toast("Đợi nhân vật trả lời xong đã nhé"); return; }
-    st.sending = true;
+    st.sending = true;  // nhắn liền nhiều tin cũng được: nhân vật đợi bạn ngừng nhắn rồi trả lời gộp
     const cid = st.active;
     input.value = ""; autoGrow();
     $("sendBtn").disabled = true; $("photoBtn").disabled = true;
-    const kick = setTimeout(() => poll(), 350); // hiện tin của mình + "đang nhập..." ngay
+    const kick = setTimeout(() => poll(), 350);
+    if (matchMedia("(max-width: 760px)").matches) input.focus();  // giữ bàn phím như Messenger
     try {
       await api("POST", `/api/characters/${cid}/messages`, { text, want_photo: wantPhoto });
     } catch (e) {
@@ -238,14 +244,76 @@
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(min-width: 761px)").matches) { e.preventDefault(); send(); }
   });
-  $("backBtn").addEventListener("click", () => {
+  // Giục nhắn: trả lời ngay tin đang chờ, hoặc nhân vật chủ động nhắn trước
+  const nudgeBtn = $("nudgeBtn");
+  nudgeBtn.addEventListener("click", async () => {
+    if (!st.active || st.busy) return;
+    const cid = st.active;
+    nudgeBtn.disabled = true;
+    try {
+      await api("POST", `/api/characters/${cid}/nudge`);
+      if (cid === st.active) { await poll(); scrollBottom(); }
+    } catch (e) { toast(e.message, "bad"); }
+    finally { setTimeout(() => { nudgeBtn.disabled = false; }, 1500); }
+  });
+
+  function closeChat() {
+    if (!app.classList.contains("show-thread")) return;
+    input.blur();
     app.classList.remove("show-thread");
     st.active = null;
     renderRoster();
-  });
+  }
+  // nút ← và vuốt lùi đều đi qua lịch sử, để cử chỉ vuốt của Safari cũng chỉ đóng hội thoại
+  const goBack = () => { if (history.state && history.state.thread) history.back(); else closeChat(); };
+  $("backBtn").addEventListener("click", goBack);
+  window.addEventListener("popstate", closeChat);
+
+  // Vuốt từ mép trái sang phải để về danh sách (cho chế độ "Thêm vào màn hình chính", nơi Safari không có cử chỉ lùi)
+  (() => {
+    const thread = $("thread");
+    let sx = 0, sy = 0, dx = 0, tracking = false;
+    const standalone = () => navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+    thread.addEventListener("touchstart", (e) => {
+      const t = e.touches[0];
+      tracking = narrow() && standalone() && e.touches.length === 1 && t.clientX < 28;
+      sx = t.clientX; sy = t.clientY; dx = 0;
+    }, { passive: true });
+    thread.addEventListener("touchmove", (e) => {
+      if (!tracking) return;
+      const t = e.touches[0];
+      dx = t.clientX - sx;
+      if (Math.abs(t.clientY - sy) > 60) { tracking = false; thread.style.transform = ""; return; }
+      if (dx > 0) thread.style.transform = `translateX(${Math.min(dx, innerWidth)}px)`;
+    }, { passive: true });
+    thread.addEventListener("touchend", () => {
+      if (!tracking) return;
+      tracking = false;
+      const done = dx > Math.min(110, innerWidth * 0.3);
+      thread.style.transition = "transform .18s ease-out";
+      thread.style.transform = done ? `translateX(${innerWidth}px)` : "";
+      setTimeout(() => {
+        thread.style.transition = ""; thread.style.transform = "";
+        if (done) goBack();
+      }, 180);
+    });
+  })();
+
+  // Bàn phím iOS: cho khung app cao đúng phần nhìn thấy, không để trang bị đẩy lên dưới thanh trạng thái
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const fit = () => {
+      document.documentElement.style.setProperty("--vvh", vv.height + "px");
+      if (narrow() && (window.scrollY || vv.offsetTop)) window.scrollTo(0, 0);
+    };
+    vv.addEventListener("resize", () => { fit(); if (document.activeElement === input) scrollBottom(); });
+    vv.addEventListener("scroll", fit);
+    fit();
+  }
 
   // ---------- chạy ----------
   (async () => {
+    if (history.state && history.state.thread) history.replaceState(null, "");  // tải lại trang khi đang mở hội thoại
     await loadRoster();
     const last = UI.store.get("waifu_last_chat", null);
     const wide = matchMedia("(min-width: 761px)").matches;

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>WaifuAI Quản lý</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23d9466f' d='M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.8 4.5c2.2 0 3.6 1.2 4.4 2.6.8-1.4 2.2-2.6 4.4-2.6 3.8 0 5.9 3.9 4.4 7.3C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/common.css?v=1">
-  <link rel="stylesheet" href="/static/admin.css?v=1">
+  <link rel="stylesheet" href="/static/common.css?v=2">
+  <link rel="stylesheet" href="/static/admin.css?v=6">
 </head>
 <body>
   <header class="topbar">
@@ -14,6 +14,7 @@
     <nav class="tabs" id="mainTabs">
       <button class="tab active" data-view="chars">Nhân vật</button>
       <button class="tab" data-view="settings">Cài đặt</button>
+      <button class="tab" data-view="logs">Log</button>
     </nav>
     <div class="status" id="statusPills"></div>
     <a class="btn sm primary" href="/chat">Mở Chat</a>
@@ -37,9 +38,10 @@
     </section>
 
     <section class="view view-settings hidden" id="view-settings"></section>
+    <section class="view view-logs hidden" id="view-logs"></section>
   </main>
 
-  <script src="/static/ui.js?v=1"></script>
-  <script src="/static/admin.js?v=1"></script>
+  <script src="/static/ui.js?v=3"></script>
+  <script src="/static/admin.js?v=11"></script>
 </body>
 </html>

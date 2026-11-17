@@ -1,15 +1,19 @@
 """WaifuAI — máy chủ web: giao diện Chat (/chat), giao diện Quản lý (/admin) và API."""
 import asyncio
+import datetime as dt
 import logging
 import random
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from urllib.parse import quote
+
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import companion, db, images, importer, llm, prompts, safety, settings
+from . import auth, companion, dates, db, images, importer, llm, prompts, safety, settings
 
 WEB = db.ROOT / "web"
 log = logging.getLogger("waifuai")
@@ -25,6 +29,7 @@ async def lifespan(_app):
                                           "character_id": m["character_id"], "scene": m["image_prompt"]})
     for c in db.q("SELECT id FROM characters WHERE avatar_status='pending'"):
         companion.image_queue.put_nowait({"kind": "avatar", "character_id": c["id"]})
+    companion.resume_pending()  # tin người chơi gửi lúc máy chủ tắt
     yield
     for t in tasks:
         t.cancel()
@@ -33,6 +38,63 @@ async def lifespan(_app):
 app = FastAPI(title="WaifuAI", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 app.mount("/images", StaticFiles(directory=db.IMAGES, check_dir=False), name="images")
+
+
+# ---------- đăng nhập ----------
+
+PUBLIC_PATHS = {"/login", "/api/login", "/logout", "/static/common.css", "/static/login.js"}
+NO_PASSWORD_MSG = ("Chưa đặt mật khẩu nên WaifuAI chỉ mở được trên chính máy chủ. "
+                   "Chạy dat-mat-khau.bat trong thư mục WaifuAI để đặt mật khẩu.")
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS:
+        return await call_next(request)
+    if auth.enabled():
+        if auth.valid_token(request.cookies.get(auth.COOKIE)):
+            return await call_next(request)
+        if path.startswith("/api/") or request.method != "GET":
+            return JSONResponse({"detail": "Cần đăng nhập"}, status_code=401)
+        return RedirectResponse("/login?next=" + quote(path, safe="/"), status_code=303)
+    # chưa đặt mật khẩu: chỉ cho chính máy này, không qua proxy / mạng ngoài
+    if auth.is_direct_local(request):
+        return await call_next(request)
+    return JSONResponse({"detail": NO_PASSWORD_MSG}, status_code=403)
+
+
+@app.get("/login")
+def login_page():
+    return FileResponse(WEB / "login.html", headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/api/login")
+async def login(request: Request, data: dict = Body(...)):
+    if not auth.enabled():
+        raise HTTPException(403, NO_PASSWORD_MSG)
+    key = auth.client_key(request)
+    wait = auth.locked_for(key)
+    if wait:
+        raise HTTPException(429, f"Sai quá nhiều lần, thử lại sau {wait // 60 + 1} phút")
+    ok = await asyncio.to_thread(auth.verify_password, str(data.get("password", "")), auth.load()["password"])
+    if not ok:
+        auth.record_fail(key)
+        log.warning("Đăng nhập sai từ %s", key)
+        await asyncio.sleep(1)
+        raise HTTPException(401, "Sai mật khẩu")
+    auth.clear_fails(key)
+    res = JSONResponse({"ok": True})
+    res.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.MAX_AGE, httponly=True,
+                   samesite="lax", secure=auth.is_https(request), path="/")
+    return res
+
+
+@app.get("/logout")
+def logout():
+    res = RedirectResponse("/login", status_code=303)
+    res.delete_cookie(auth.COOKIE, path="/")
+    return res
 
 
 @app.get("/")
@@ -61,6 +123,27 @@ def _validate_char(fields, partial=False):
     if not partial or "name" in fields:
         if not str(fields.get("name", "")).strip():
             raise HTTPException(400, "Nhân vật cần có tên")
+    if fields.get("birthday"):
+        b = dates.parse_date(fields["birthday"])
+        if not b or b > dt.date.today():
+            raise HTTPException(400, "Ngày sinh không hợp lệ (dd/mm/yyyy)")
+        tuoi = dates.age_on(b.isoformat(), dt.date.today())
+        if tuoi < safety.MIN_AGE:
+            raise HTTPException(400, f"Theo ngày sinh nhân vật mới {tuoi} tuổi — phải từ {safety.MIN_AGE} trở lên")
+        fields["age"] = tuoi  # tuổi đi theo ngày sinh
+    if fields.get("period_start") and not dates.parse_date(fields["period_start"]):
+        raise HTTPException(400, "Ngày đến kỳ không hợp lệ (dd/mm/yyyy)")
+    for key, (lo, hi), label, unit in (("cycle_length", dates.CYCLE_RANGE, "Chu kỳ", " ngày"),
+                                       ("period_length", dates.PERIOD_RANGE, "Số ngày mỗi kỳ", " ngày"),
+                                       ("photo_rate", (0, 100), "Tỷ lệ tự gửi ảnh", "%"),
+                                       ("photos_max", (1, 5), "Số ảnh tối đa mỗi lần nhắn", " ảnh")):
+        if key in fields:
+            try:
+                v = int(fields[key])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{label} phải là số")
+            if not lo <= v <= hi:
+                raise HTTPException(400, f"{label} phải từ {lo} đến {hi}{unit}")
     if "age" in fields:
         try:
             age = int(fields["age"])
@@ -111,7 +194,7 @@ def put_settings(data: dict = Body(...)):
 
 def _with_runtime(c):
     c["busy"] = companion.is_busy(c["id"])
-    c["activity"] = prompts.current_activity(db.list_schedule(c["id"]))
+    c["activity"] = companion.activity_now(c["id"])
     last = db.one("SELECT id, role, content, image_path, created_at FROM messages WHERE character_id=? AND role!='system'"
                   " ORDER BY id DESC LIMIT 1", (c["id"],))
     c["last_message"] = last
@@ -189,6 +272,29 @@ def gen_avatar(cid: int, data: dict = Body(default={})):
     return db.get_character(cid)
 
 
+@app.post("/api/characters/{cid}/face-ref")
+def upload_face_ref(cid: int, data: dict = Body(...)):
+    """Tải ảnh mặt mẫu cho PuLID (data URL). Ảnh mới luôn cần tích xác nhận lại (face_ref_ok = 0)."""
+    c = _char_or_404(cid)
+    name = importer._save_data_url(data.get("image"), cid)
+    if not name:
+        raise HTTPException(400, "Ảnh không hợp lệ (cần PNG / JPG / WEBP)")
+    old = c.get("face_ref") or ""
+    db.update_character(cid, {"face_ref": name, "face_ref_ok": 0})
+    if old:
+        (db.IMAGES / Path(old).name).unlink(missing_ok=True)
+    return db.get_character(cid)
+
+
+@app.delete("/api/characters/{cid}/face-ref")
+def delete_face_ref(cid: int):
+    c = _char_or_404(cid)
+    if c.get("face_ref"):
+        (db.IMAGES / Path(c["face_ref"]).name).unlink(missing_ok=True)
+    db.update_character(cid, {"face_ref": "", "face_ref_ok": 0})
+    return db.get_character(cid)
+
+
 @app.post("/api/characters/{cid}/appearance-tags")
 async def gen_tags(cid: int, data: dict = Body(default={})):
     c = _char_or_404(cid)
@@ -245,19 +351,40 @@ def del_mem(mid: int):
 
 # ---------- lịch sinh hoạt ----------
 
-_HM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+_clean_schedule = db.clean_schedule
 
 
-def _clean_schedule(items):
-    out = []
-    for it in items or []:
-        t = str(it.get("time", "")).strip()
-        if re.fullmatch(r"\d:[0-5]\d", t):
-            t = "0" + t
-        a = str(it.get("activity", "")).strip()
-        if _HM.fullmatch(t) and a:
-            out.append({"time": t, "activity": a[:200], "proactive": bool(it.get("proactive"))})
-    return sorted(out, key=lambda x: x["time"])
+# Lịch HÔM NAY do AI soạn riêng cho từng ngày (lịch mẫu bên dưới chỉ là thói quen để AI tham khảo)
+
+def _today_payload(cid):
+    c = db.get_character(cid)
+    today = dt.date.today()
+    return {"date": today.isoformat(), "weekday": prompts.weekday_vi(today), "workday": prompts.is_workday(c, today),
+            "items": db.get_day_schedule(cid, today.isoformat()), "activity": companion.activity_now(cid),
+            "planning": companion.is_planning(cid)}
+
+
+@app.get("/api/characters/{cid}/today")
+def get_today(cid: int):
+    _char_or_404(cid)
+    return _today_payload(cid)
+
+
+@app.put("/api/characters/{cid}/today")
+def put_today(cid: int, data: dict = Body(...)):
+    _char_or_404(cid)
+    db.replace_day_schedule(cid, dt.date.today().isoformat(), _clean_schedule(data.get("items")))
+    return _today_payload(cid)
+
+
+@app.post("/api/characters/{cid}/today/generate")
+async def regenerate_today(cid: int):
+    _char_or_404(cid)
+    try:
+        await companion.plan_day(cid, force=True)
+    except llm.LLMError as e:
+        raise HTTPException(502, str(e))
+    return _today_payload(cid)
 
 
 @app.get("/api/characters/{cid}/schedule")
@@ -299,7 +426,7 @@ def get_messages(cid: int, rev: int = 0, limit: int = 80):
         rows = db.messages_since(cid, rev)
     return {"messages": rows, "rev": db.max_rev(), "busy": companion.is_busy(cid),
             "mood": c["mood"], "mood_reason": c["mood_reason"],
-            "activity": prompts.current_activity(db.list_schedule(cid))}
+            "activity": companion.activity_now(cid)}
 
 
 @app.get("/api/characters/{cid}/messages/before")
@@ -312,14 +439,10 @@ def older_messages(cid: int, before: int, limit: int = 50):
 @app.post("/api/characters/{cid}/messages")
 async def send_message(cid: int, data: dict = Body(...)):
     _char_or_404(cid)
-    if companion.is_busy(cid):
-        raise HTTPException(409, "Nhân vật đang trả lời, chờ chút")
-    try:
+    try:  # chỉ lưu tin + hẹn giờ; nhân vật trả lời sau reply_delay_seconds (nhắn thêm thì đếm lại)
         await companion.user_message(cid, str(data.get("text", "")), bool(data.get("want_photo")))
     except ValueError as e:
         raise HTTPException(400, str(e))
-    except llm.LLMError as e:
-        raise HTTPException(502, str(e))
     return {"ok": True, "rev": db.max_rev()}
 
 
@@ -342,6 +465,21 @@ def retry_image(mid: int):
     companion.image_queue.put_nowait({"kind": "message", "message_id": mid,
                                       "character_id": m["character_id"], "scene": m["image_prompt"]})
     return {"ok": True}
+
+
+@app.get("/api/logs")
+def get_logs(character_id: int = 0, kind: str = "", before: int = 0, limit: int = 200):
+    return db.list_logs(character_id or None, kind, before, limit)
+
+
+@app.post("/api/characters/{cid}/nudge")
+async def nudge(cid: int):  # async: cần vòng lặp sự kiện để tạo tác vụ nền
+    """Nút "Giục nhắn": trả lời ngay tin đang chờ, hoặc để nhân vật chủ động nhắn."""
+    _char_or_404(cid)
+    mode = companion.nudge(cid)
+    if mode == "busy":
+        raise HTTPException(409, "Nhân vật đang soạn tin rồi")
+    return {"ok": True, "mode": mode}
 
 
 @app.post("/api/characters/{cid}/proactive-test")

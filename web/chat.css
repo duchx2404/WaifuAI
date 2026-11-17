@@ -1,4 +1,5 @@
-.app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; height: 100dvh; }
+html, body { overflow: hidden; overscroll-behavior: none; }
+.app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; height: 100dvh; height: var(--vvh, 100dvh); }
 
 /* ---------- danh sách nhân vật ---------- */
 .roster { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--bg-2); }
@@ -37,6 +38,8 @@
   background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(8px);
 }
 .thread-head .back { display: none; }
+.thread-head .nudge { flex: none; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.thread-head .nudge:disabled { opacity: .45; }
 .head-info { min-width: 0; flex: 1; }
 .head-name { font-weight: 700; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .head-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); min-width: 0; }
@@ -84,6 +87,7 @@
 .composer textarea {
   flex: 1; min-height: 42px; max-height: 160px; resize: none; padding: 10px 14px; border-radius: 21px;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: inherit; outline: none; line-height: 1.4;
+  font-size: 16px; /* dưới 16px thì Safari iOS tự phóng to trang khi chạm vào ô */
 }
 .composer textarea:focus { border-color: var(--accent); }
 .composer .send { width: 42px; height: 42px; min-height: 42px; padding: 0; border-radius: 50%; }
@@ -91,12 +95,15 @@
 
 /* ---------- điện thoại ---------- */
 @media (max-width: 760px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+  /* hội thoại phủ lên danh sách: vuốt sang phải thì thấy danh sách bên dưới, như Messenger */
+  .app { grid-template-columns: minmax(0, 1fr); position: relative; overflow: hidden; }
   .roster { min-width: 0; border-right: 0; }
-  .thread { display: none; }
-  .app.show-thread .roster { display: none; }
+  .roster-head { padding-top: max(16px, env(safe-area-inset-top)); }
+  .thread { display: none; position: absolute; inset: 0; z-index: 2; background: var(--bg); box-shadow: -8px 0 24px rgba(0,0,0,.18); }
   .app.show-thread .thread { display: flex; }
-  .thread-head { padding: 10px 12px; }
+  .thread-head { padding: max(10px, env(safe-area-inset-top)) 12px 10px; }
   .thread-head .back { display: inline-flex; }
+  .thread-head .nudge { width: 38px; height: 38px; min-height: 38px; padding: 0; border-radius: 50%; }
+  .thread-head .nudge span { display: none; }
   .msg { max-width: 86%; }
 }

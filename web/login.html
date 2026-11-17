@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>WaifuAI Đăng nhập</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23d9466f' d='M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.8 4.5c2.2 0 3.6 1.2 4.4 2.6.8-1.4 2.2-2.6 4.4-2.6 3.8 0 5.9 3.9 4.4 7.3C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/common.css?v=2">
+  <style>
+    body { display: grid; place-items: center; min-height: 100%; padding: 16px; }
+    .login-card {
+      width: 100%; max-width: 360px; padding: 28px 24px; border-radius: var(--radius);
+      background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .login-brand { font-size: 24px; font-weight: 700; text-align: center; }
+    .login-brand span { color: var(--accent); }
+    .login-sub { margin: -8px 0 0; text-align: center; color: var(--muted); font-size: 13px; }
+    .login-card .btn { width: 100%; min-height: 42px; }
+    .login-err { min-height: 20px; margin: 0; font-size: 13px; color: var(--bad); text-align: center; }
+  </style>
+</head>
+<body>
+  <form class="login-card" id="form" autocomplete="on">
+    <div class="login-brand">Waifu<span>AI</span></div>
+    <p class="login-sub">Nhập mật khẩu để vào</p>
+    <input type="text" name="username" value="waifuai" autocomplete="username" hidden>
+    <div class="field">
+      <label for="pw">Mật khẩu</label>
+      <input class="input" id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+    </div>
+    <button class="btn primary" id="go" type="submit">Đăng nhập</button>
+    <p class="login-err" id="err" role="alert"></p>
+  </form>
+  <script src="/static/login.js?v=1"></script>
+</body>
+</html>
