@@ -43,7 +43,9 @@
         h("a", { class: "btn primary", href: "/admin" }, "Tạo nhân vật")));
       return;
     }
-    const sorted = [...st.chars].sort((a, b) => (b.last_message?.id || 0) - (a.last_message?.id || 0));
+    // xếp theo thời gian tin cuối (tin nhập từ IdolAI có id mới nhưng ngày cũ)
+    const key = (c) => (c.last_message ? c.last_message.created_at : "");
+    const sorted = [...st.chars].sort((a, b) => key(b).localeCompare(key(a)) || b.id - a.id);
     for (const c of sorted) {
       const last = c.last_message;
       const unread = last && last.role === "assistant" && last.id > (st.seen[c.id] || 0) && c.id !== st.active;
