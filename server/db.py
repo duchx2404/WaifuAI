@@ -230,6 +230,14 @@ def ex(sql, args=()):
 
 # ---------- nhân vật ----------
 
+MAX_FACE_REFS = 6
+
+
+def face_refs(row):
+    """Các ảnh mặt mẫu PuLID (cột face_ref lưu tên file cách nhau dấu phẩy; tên do app sinh, không chứa dấu phẩy)."""
+    return [n.strip() for n in (row.get("face_ref") or "").split(",") if n.strip()]
+
+
 def _char_out(row):
     if not row:
         return None
@@ -242,6 +250,7 @@ def _char_out(row):
     row["pinned"] = bool(row.get("pinned"))
     row["face_lock"] = bool(row.get("face_lock", 1))
     row["face_ref_ok"] = bool(row.get("face_ref_ok"))
+    row["face_refs"] = face_refs(row)
     try:
         row["anniversaries"] = json.loads(row.get("anniversaries") or "[]")
     except ValueError:

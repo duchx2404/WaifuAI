@@ -148,17 +148,25 @@ def build_workflow(positive, negative, seed, lora_name="", lora_strength=0.8, fa
             "lora_name": lora_name, "strength_model": lora_strength, "strength_clip": lora_strength,
             "model": ["4", 0], "clip": ["4", 1]}}
         model_src, clip_src = "10", "10"
-    if face_image:  # PuLID SDXL: khoá khuôn mặt theo ảnh đại diện app đã vẽ
+    faces = [face_image] if isinstance(face_image, str) and face_image else list(face_image or [])
+    if faces:  # PuLID SDXL: khoá khuôn mặt theo ảnh mặt mẫu; nhiều ảnh gộp một lô → PuLID lấy trung bình khuôn mặt
         wf.update({
             "20": {"class_type": "PulidModelLoader", "inputs": {"pulid_file": s["pulid_file"]}},
             "21": {"class_type": "PulidEvaClipLoader", "inputs": {}},
             "22": {"class_type": "PulidInsightFaceLoader", "inputs": {"provider": "CPU"}},
-            "23": {"class_type": "LoadImage", "inputs": {"image": face_image}},
-            "24": {"class_type": "ApplyPulid", "inputs": {
-                "model": [model_src, 0], "pulid": ["20", 0], "eva_clip": ["21", 0], "face_analysis": ["22", 0],
-                "image": ["23", 0], "method": "fidelity", "weight": float(s["pulid_weight"]),
-                "start_at": 0.0, "end_at": 1.0}},
         })
+        img = None
+        for i, name in enumerate(faces):
+            wf[f"4{i}"] = {"class_type": "LoadImage", "inputs": {"image": name}}
+            if img is None:
+                img = [f"4{i}", 0]
+            else:  # ImageBatch tự co ảnh sau về cỡ ảnh đầu
+                wf[f"6{i}"] = {"class_type": "ImageBatch", "inputs": {"image1": img, "image2": [f"4{i}", 0]}}
+                img = [f"6{i}", 0]
+        wf["24"] = {"class_type": "ApplyPulid", "inputs": {
+            "model": [model_src, 0], "pulid": ["20", 0], "eva_clip": ["21", 0], "face_analysis": ["22", 0],
+            "image": img, "method": "fidelity", "weight": float(s["pulid_weight"]),
+            "start_at": 0.0, "end_at": 1.0}}
         model_src = "24"
     wf.update({
         "6": {"class_type": "CLIPTextEncode", "inputs": {"text": positive, "clip": [clip_src, 1]}},
@@ -197,21 +205,24 @@ async def ensure_checkpoint():
         db.save_setting("checkpoint", opts["checkpoints"][0])
 
 
+last_face = ""  # ảnh mặt mẫu đã gửi kèm ở lần vẽ gần nhất (để ghi log); vẽ tuần tự dưới gpu_lock nên không tranh chấp
+
+
 def face_source(character):
-    """Ảnh làm mặt mẫu PuLID, hoặc None.
-    1. Ảnh mặt mẫu người dùng tải lên (face_ref) — CHỈ khi đã tích xác nhận ảnh do AI tạo / nhân vật hư cấu (face_ref_ok).
+    """Danh sách ảnh làm mặt mẫu PuLID (rỗng = không có).
+    1. Các ảnh mặt mẫu người dùng tải lên (face_ref) — CHỈ khi đã tích xác nhận ảnh do AI tạo / nhân vật hư cấu (face_ref_ok).
     2. Không có thì ảnh đại diện do chính app vẽ (avatar_source == "gen"). Ảnh đại diện nhập từ ngoài không bao giờ dùng."""
     if not character.get("face_lock"):
-        return None
-    ref = character.get("face_ref") or ""
-    if ref and character.get("face_ref_ok"):
-        p = db.IMAGES / Path(ref).name
-        if p.is_file():
-            return p
+        return []
+    if character.get("face_ref_ok"):
+        refs = [db.IMAGES / Path(n).name for n in db.face_refs(character)]
+        refs = [p for p in refs if p.is_file()]
+        if refs:
+            return refs
     if character.get("avatar_source") != "gen":
-        return None
+        return []
     p = db.IMAGES / (character.get("avatar_path") or "")
-    return p if character.get("avatar_path") and p.is_file() else None
+    return [p] if character.get("avatar_path") and p.is_file() else []
 
 
 async def _pulid_ready():
@@ -239,13 +250,18 @@ async def generate(character, scene, seed=None, use_face=True):
     positive, negative = build_prompts(character, scene)
     if seed is None:
         seed = random.randint(1, 2**31 - 1)
-    face_image = ""
-    face = face_source(character) if use_face else None
-    if face:
-        if await _pulid_ready():
-            face_image = await _upload_face(face)
-        else:
-            log.info("Bỏ qua giữ khuôn mặt: ComfyUI chưa có node PuLID_ComfyUI hoặc %s", s["pulid_file"])
+    global last_face
+    face_image, last_face = [], ""
+    faces = face_source(character) if use_face else []
+    if faces:  # đã có ảnh mặt mẫu thì BẮT BUỘC gửi kèm — thiếu PuLID thì báo lỗi chứ không vẽ ra mặt khác
+        if not await _pulid_ready():
+            raise ImageError(f"Không gửi được ảnh mặt mẫu: ComfyUI chưa có node PuLID_ComfyUI hoặc {s['pulid_file']} "
+                             "(chạy tools\\cai_pulid_sdxl.bat)")
+        face_image = [await _upload_face(p) for p in faces]
+        last_face = ", ".join(p.name for p in faces)
+    elif use_face and character.get("face_lock"):
+        log.warning("Nhân vật %s bật giữ khuôn mặt nhưng chưa có ảnh mặt mẫu đã xác nhận — ảnh này vẽ không có mẫu",
+                    character.get("name"))
     detailer = await detailer_spec() if s["face_detail"] else None
     if s["face_detail"] and not detailer:
         log.info("Bỏ qua sửa mặt: ComfyUI chưa có FaceDetailer (chạy tools\\cai_face_detailer.bat)")

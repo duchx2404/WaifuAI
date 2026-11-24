@@ -46,6 +46,10 @@ def main():
     ap.add_argument("--rank", type=int, default=32)
     ap.add_argument("--alpha", type=int, default=0, help="mặc định rank/2; đặt bằng rank để học mạnh hơn (giữ mặt tốt hơn)")
     ap.add_argument("--min_snr", type=float, default=0, help="min-SNR gamma (vd. 5) — học chi tiết ổn định hơn; 0 = tắt")
+    ap.add_argument("--lr", type=float, default=1e-4, help="tốc độ học UNet")
+    ap.add_argument("--lap", type=int, default=10, help="số lần lặp mỗi ảnh mỗi vòng (num_repeats)")
+    ap.add_argument("--te_lr", type=float, default=0, help="> 0: luyện cả text encoder với tốc độ này (vd. 5e-5) — từ khoá mang mặt rõ hơn, tốn VRAM hơn")
+    ap.add_argument("--tiep", default="", help="luyện nối tiếp từ file LoRA này (cùng rank/alpha); --buoc là số bước THÊM")
     ap.add_argument("--ckpt", default=str(CKPT))
     a = ap.parse_args()
     goc = LEARN / f"waifu_{a.ten}"
@@ -72,7 +76,7 @@ max_bucket_reso = 1536
 
   [[datasets.subsets]]
   image_dir = '{ds.as_posix()}'
-  num_repeats = 10
+  num_repeats = {a.lap}
 """, encoding="utf-8")
 
     py = Path(sys.executable)
@@ -80,13 +84,21 @@ max_bucket_reso = 1536
            f"--pretrained_model_name_or_path={a.ckpt}", f"--dataset_config={toml}",
            f"--output_dir={out}", f"--output_name={ten_lora}", "--save_model_as=safetensors",
            "--network_module=networks.lora", f"--network_dim={a.rank}", f"--network_alpha={a.alpha or a.rank // 2}",
-           "--network_train_unet_only", "--learning_rate=1e-4", "--optimizer_type=AdamW8bit",
+           "--network_train_unet_only", f"--learning_rate={a.lr:g}", "--optimizer_type=AdamW8bit",
            "--lr_scheduler=cosine", "--lr_warmup_steps=60", f"--max_train_steps={a.buoc}",
            "--mixed_precision=bf16", "--save_precision=fp16", "--gradient_checkpointing", "--sdpa", "--no_half_vae",
            "--cache_latents", "--cache_latents_to_disk", "--cache_text_encoder_outputs",
            "--max_data_loader_n_workers=0", "--seed=42", f"--save_every_n_steps={max(a.buoc // 3, 100)}"]
     if a.min_snr > 0:
         cmd.append(f"--min_snr_gamma={a.min_snr}")
+    if a.tiep:
+        if not Path(a.tiep).is_file():
+            raise SystemExit(f"Không thấy LoRA để luyện tiếp: {a.tiep}")
+        cmd.append(f"--network_weights={a.tiep}")
+        print(f"Luyện nối tiếp từ {Path(a.tiep).name}", flush=True)
+    if a.te_lr > 0:  # luyện cả text encoder: bỏ chế độ chỉ-UNet và bỏ cache đầu ra text encoder (không dùng chung được)
+        cmd = [x for x in cmd if x not in ("--network_train_unet_only", "--cache_text_encoder_outputs")]
+        cmd.append(f"--text_encoder_lr={a.te_lr:g}")
     print(f"Huấn luyện LoRA SDXL '{ten_lora}' · {n} ảnh · {a.buoc} bước · rank {a.rank} / alpha {a.alpha or a.rank // 2}"
           f"{f' · min-SNR {a.min_snr:g}' if a.min_snr > 0 else ''} · gốc {Path(a.ckpt).name}", flush=True)
     nhuong_vram()

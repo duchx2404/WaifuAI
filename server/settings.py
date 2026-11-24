@@ -22,9 +22,12 @@ DEFAULTS = {
     # Mô hình ảnh (SDXL qua ComfyUI) — mặc định theo khuyến nghị của LUSTIFY v2 (ảnh tả thực)
     "image_enabled": True,
     "checkpoint": "",
-    # không dùng "detailed skin texture": làm lộ lỗ chân lông / nếp nhăn → nhân vật trông già hơn tuổi
-    "quality_prefix": "photo, high quality photography, sharp focus, soft lighting, natural smooth skin",
-    "negative_extra": "worst quality, low quality, lowres, anime, cartoon, illustration, drawing, painting, 3d render, cgi, deformed, bad anatomy, bad hands, extra fingers, missing fingers, blurry, watermark, text, signature",
+    # "smooth skin" / "soft lighting" làm mặt bóng như nhựa → tả ảnh chụp thật có kết cấu da. Ảnh mặt mẫu (PuLID) +
+    # phần cấm vẽ tuổi giữ nhân vật trẻ (đã thử 2026-11-19: giống 0.65, không bị già)
+    "quality_prefix": "raw photo, candid smartphone photo, photorealistic, realistic skin texture, visible skin pores, "
+                      "natural skin, slight film grain, natural lighting",
+    "negative_extra": "worst quality, low quality, lowres, anime, cartoon, illustration, drawing, painting, 3d render, cgi, deformed, bad anatomy, bad hands, extra fingers, missing fingers, blurry, watermark, text, signature, "
+                      "plastic skin, airbrushed, smooth skin, waxy skin, doll, porcelain skin, beauty filter, overly smooth skin, glossy skin, cgi face",
     "steps": 30,
     "cfg": 5.0,
     "sampler": "dpmpp_2m_sde",
@@ -36,7 +39,7 @@ DEFAULTS = {
     "pulid_weight": 0.8,
     # Sửa mặt sau khi vẽ (FaceDetailer của Impact Pack — xem tools\cai_face_detailer.bat); chưa cài thì tự bỏ qua
     "face_detail": True,
-    "face_detail_denoise": 0.4,
+    "face_detail_denoise": 0.3,  # cao hơn (0.5) vẽ lại mặt mịn như sáp
     # Chủ động nhắn
     "proactive_enabled": True,
     "quiet_start": "23:30",

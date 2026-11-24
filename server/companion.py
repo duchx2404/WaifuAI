@@ -508,8 +508,12 @@ async def _run_image_job(job):
             if s["vram_swap"]:
                 await llm.unload_all()
             try:
-                # ảnh đại diện là nơi TẠO ra khuôn mặt → không khoá mặt theo ảnh cũ
-                name = await images.generate(c, scene, seed=seed, use_face=job["kind"] != "avatar")
+                # ảnh đại diện vẽ theo ảnh mặt mẫu đã xác nhận nếu có; không có thì nó là nơi TẠO ra khuôn mặt
+                # → không khoá mặt theo ảnh đại diện cũ
+                has_ref = bool(c.get("face_ref") and c.get("face_ref_ok"))
+                name = await images.generate(c, scene, seed=seed, use_face=job["kind"] != "avatar" or has_ref)
+                db.add_log(c["id"], "image", "Gửi kèm ảnh mặt mẫu (PuLID)" if images.last_face else "Vẽ không có ảnh mặt mẫu",
+                           {"face": images.last_face})
             finally:
                 if s["vram_swap"]:
                     await images.free_vram()

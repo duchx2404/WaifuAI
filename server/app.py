@@ -274,24 +274,31 @@ def gen_avatar(cid: int, data: dict = Body(default={})):
 
 @app.post("/api/characters/{cid}/face-ref")
 def upload_face_ref(cid: int, data: dict = Body(...)):
-    """Tải ảnh mặt mẫu cho PuLID (data URL). Ảnh mới luôn cần tích xác nhận lại (face_ref_ok = 0)."""
+    """Thêm một ảnh mặt mẫu cho PuLID (data URL), tối đa db.MAX_FACE_REFS ảnh — nhiều ảnh thì PuLID lấy trung bình
+    khuôn mặt, giống hơn một ảnh. Thêm ảnh luôn cần tích xác nhận lại (face_ref_ok = 0)."""
     c = _char_or_404(cid)
+    refs = c["face_refs"]
+    if len(refs) >= db.MAX_FACE_REFS:
+        raise HTTPException(400, f"Tối đa {db.MAX_FACE_REFS} ảnh mặt mẫu — xoá bớt trước")
     name = importer._save_data_url(data.get("image"), cid)
     if not name:
         raise HTTPException(400, "Ảnh không hợp lệ (cần PNG / JPG / WEBP)")
-    old = c.get("face_ref") or ""
-    db.update_character(cid, {"face_ref": name, "face_ref_ok": 0})
-    if old:
-        (db.IMAGES / Path(old).name).unlink(missing_ok=True)
+    db.update_character(cid, {"face_ref": ",".join(refs + [name]), "face_ref_ok": 0})
     return db.get_character(cid)
 
 
 @app.delete("/api/characters/{cid}/face-ref")
-def delete_face_ref(cid: int):
+def delete_face_ref(cid: int, name: str = ""):
+    """Xoá một ảnh mặt mẫu (?name=) hoặc tất cả. Còn ảnh thì giữ xác nhận (bớt ảnh không thêm ảnh lạ)."""
     c = _char_or_404(cid)
-    if c.get("face_ref"):
-        (db.IMAGES / Path(c["face_ref"]).name).unlink(missing_ok=True)
-    db.update_character(cid, {"face_ref": "", "face_ref_ok": 0})
+    refs = c["face_refs"]
+    gone = [n for n in refs if not name or n == name]
+    if name and not gone:
+        raise HTTPException(404, "Không có ảnh mặt mẫu này")
+    for n in gone:
+        (db.IMAGES / Path(n).name).unlink(missing_ok=True)
+    left = [n for n in refs if n not in gone]
+    db.update_character(cid, {"face_ref": ",".join(left), "face_ref_ok": int(bool(left and c["face_ref_ok"]))})
     return db.get_character(cid)
 
 

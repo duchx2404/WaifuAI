@@ -83,6 +83,10 @@ main { flex: 1; min-height: 0; }
 
 /* ảnh mặt mẫu */
 .face-ref-img { width: 96px; height: 128px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); flex: none; }
+.face-ref-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.face-ref-item { position: relative; }
+.face-ref-del { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: 0; cursor: pointer;
+  background: rgba(0, 0, 0, .6); color: #fff; font-size: 16px; line-height: 24px; padding: 0; }
 .face-ref-img.empty { display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); background: var(--panel-2); }
 
 /* lịch hôm nay / ngày đi làm */

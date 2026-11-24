@@ -452,42 +452,49 @@
 
   function faceHint(c) {
     if (!st.status.image_options.pulid) return "ComfyUI chưa có PuLID SDXL (chạy tools\\cai_pulid_sdxl.bat rồi khởi động lại ComfyUI). Chưa có thì ảnh vẫn vẽ bình thường, chỉ không khoá mặt.";
-    if (c.face_ref && st.draft.face_ref_ok) return "Mọi ảnh trong chat khoá theo khuôn mặt trong Ảnh mặt mẫu bên dưới.";
+    if (c.face_ref && st.draft.face_ref_ok) return `Mọi ảnh trong chat gửi kèm ${(c.face_refs || []).length} ảnh mặt mẫu bên dưới để khoá khuôn mặt.`;
     if (c.face_ref) return "Đã có Ảnh mặt mẫu nhưng chưa tích xác nhận bên dưới — chưa dùng.";
     if (c.avatar_source === "gen") return "Mọi ảnh trong chat giữ khuôn mặt của ảnh đại diện (app tự vẽ).";
     return "Tải Ảnh mặt mẫu bên dưới (ảnh AI của nhân vật), hoặc bấm Vẽ lại ảnh đại diện để app tự vẽ mặt mẫu.";
   }
 
   // Ảnh mặt mẫu PuLID tải lên — chỉ dùng khi người dùng xác nhận ảnh do AI tạo / nhân vật hư cấu
+  const MAX_FACE_REFS = 6;
   function faceRefBlock(c) {
+    const refs = c.face_refs || [];
     const box = h("div", { class: "field span2 face-ref" });
-    const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", hidden: true });
-    const up = h("button", { class: "btn sm", type: "button", onclick: () => file.click() }, c.face_ref ? "Đổi ảnh mặt mẫu" : "Tải ảnh mặt mẫu");
-    file.addEventListener("change", () => {
-      const f = file.files[0]; if (!f) return;
-      const rd = new FileReader();
-      rd.onload = async () => {
-        UI.busy(up, true, "Đang tải");
-        try {
-          const nc = await api("POST", `/api/characters/${c.id}/face-ref`, { image: rd.result });
-          st.cur = { ...st.cur, face_ref: nc.face_ref, face_ref_ok: false }; st.draft.face_ref_ok = false;
-          toast("Đã tải ảnh mặt mẫu — tích xác nhận rồi bấm Lưu", "ok"); renderEditor();
-        } catch (e) { toast(e.message, "bad"); UI.busy(up, false); }
-      };
-      rd.readAsDataURL(f);
+    const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", multiple: true, hidden: true });
+    const up = h("button", { class: "btn sm", type: "button", disabled: refs.length >= MAX_FACE_REFS, onclick: () => file.click() },
+      refs.length ? "Thêm ảnh mặt mẫu" : "Tải ảnh mặt mẫu");
+    const apply = (nc) => {
+      st.cur = { ...st.cur, face_ref: nc.face_ref, face_refs: nc.face_refs, face_ref_ok: nc.face_ref_ok };
+      st.draft.face_ref_ok = nc.face_ref_ok;
+    };
+    const readUrl = (f) => new Promise((ok, bad) => { const rd = new FileReader(); rd.onload = () => ok(rd.result); rd.onerror = bad; rd.readAsDataURL(f); });
+    file.addEventListener("change", async () => {
+      const fs = [...file.files].slice(0, MAX_FACE_REFS - refs.length); if (!fs.length) return;
+      UI.busy(up, true, "Đang tải");
+      try {
+        for (const f of fs) apply(await api("POST", `/api/characters/${c.id}/face-ref`, { image: await readUrl(f) }));
+        toast("Đã thêm ảnh mặt mẫu — tích xác nhận rồi bấm Lưu", "ok"); renderEditor();
+      } catch (e) { toast(e.message, "bad"); renderEditor(); }
     });
-    const del = c.face_ref ? h("button", { class: "btn sm ghost danger", type: "button", onclick: async () => {
-      try { const nc = await api("DELETE", `/api/characters/${c.id}/face-ref`); st.cur = { ...st.cur, face_ref: "", face_ref_ok: false }; st.draft.face_ref_ok = false; renderEditor(); }
+    const delOne = (name) => async () => {
+      try { apply(await api("DELETE", `/api/characters/${c.id}/face-ref?name=${encodeURIComponent(name)}`)); renderEditor(); }
       catch (e) { toast(e.message, "bad"); }
-    } }, "Xoá") : "";
-    box.append(h("label", {}, "Ảnh mặt mẫu (PuLID)"),
-      h("div", { class: "row nowrap", style: "align-items:flex-start;gap:14px" },
-        c.face_ref ? h("img", { class: "face-ref-img", src: "/images/" + encodeURIComponent(c.face_ref), alt: "Ảnh mặt mẫu" }) : h("div", { class: "face-ref-img empty" }, "Chưa có"),
-        h("div", { style: "display:flex;flex-direction:column;gap:8px;min-width:0" },
-          h("div", { class: "row" }, up, del, file),
-          c.face_ref ? UI.switch(st.draft.face_ref_ok, "Tôi xác nhận ảnh này do AI tạo, là nhân vật hư cấu — không phải ảnh / khuôn mặt người thật",
-            (v) => { st.draft.face_ref_ok = v; markDirty(); }) : "",
-          h("div", { class: "hint" }, "Ảnh rõ mặt, nhìn thẳng. PuLID khoá mọi ảnh chat theo khuôn mặt này (giống hơn LoRA). Không dùng ảnh người thật."))));
+    };
+    const thumbs = refs.length
+      ? refs.map((n) => h("div", { class: "face-ref-item" },
+          h("img", { class: "face-ref-img", src: "/images/" + encodeURIComponent(n), alt: "Ảnh mặt mẫu" }),
+          h("button", { class: "face-ref-del", type: "button", title: "Xoá ảnh này", "aria-label": "Xoá ảnh này", onclick: delOne(n) }, "×")))
+      : [h("div", { class: "face-ref-img empty" }, "Chưa có")];
+    box.append(h("label", {}, `Ảnh mặt mẫu (PuLID) · ${refs.length}/${MAX_FACE_REFS}`),
+      h("div", { class: "face-ref-list" }, ...thumbs),
+      h("div", { style: "display:flex;flex-direction:column;gap:8px;min-width:0;margin-top:10px" },
+        h("div", { class: "row" }, up, file),
+        refs.length ? UI.switch(st.draft.face_ref_ok, "Tôi xác nhận các ảnh này do AI tạo, là nhân vật hư cấu — không phải ảnh / khuôn mặt người thật",
+          (v) => { st.draft.face_ref_ok = v; markDirty(); }) : "",
+        h("div", { class: "hint" }, "Mỗi lần vẽ đều gửi kèm TẤT CẢ ảnh này; PuLID lấy trung bình khuôn mặt nên 3–5 ảnh cận mặt cùng một người giống hơn 1 ảnh. Ảnh rõ mặt, mặt to. Không dùng ảnh người thật.")));
     return box;
   }
 

@@ -50,27 +50,45 @@ ANH_SANG = ["soft natural window light", "warm golden hour sunlight", "soft diff
             "bright overcast daylight"]
 
 
-def ke_hoach(so, seed):
-    """Danh sách ảnh cần vẽ: ~45% cận mặt, ~35% nửa người, ~20% toàn thân; góc/biểu cảm xoay vòng cho đủ."""
+BIEU_CAM_NHE = ["calm neutral expression", "gentle closed-mouth smile", "shy smile with a light blush", "pensive dreamy expression"]
+
+
+def ke_hoach(so, seed, nghieng=False):
+    """Danh sách ảnh cần vẽ: ~45% cận mặt, ~35% nửa người, ~20% toàn thân; góc/biểu cảm xoay vòng cho đủ.
+    nghieng=True: chỉ góc nghiêng (bỏ nhìn thẳng), nửa cận mặt nửa nửa người, biểu cảm nhẹ; 1/3 ảnh nửa người là selfie gương
+    — bổ sung cho LoRA giữ mặt kém khi quay 3/4."""
     r = random.Random(seed)
-    n_mat, n_nua = round(so * 0.45), round(so * 0.35)
-    loai = ["mat"] * n_mat + ["nua"] * n_nua + ["toan"] * (so - n_mat - n_nua)
+    if nghieng:
+        goc_ds, bc_ds = GOC[1:], BIEU_CAM_NHE
+        loai = ["mat"] * (so // 2) + ["nua"] * (so - so // 2)
+    else:
+        goc_ds, bc_ds = GOC, BIEU_CAM
+        n_mat, n_nua = round(so * 0.45), round(so * 0.35)
+        loai = ["mat"] * n_mat + ["nua"] * n_nua + ["toan"] * (so - n_mat - n_nua)
     ds = []
     for i, k in enumerate(loai):
-        ds.append({"khung": k, "goc": GOC[i % len(GOC)], "bieu_cam": BIEU_CAM[(i * 3) % len(BIEU_CAM)],
-                   "toc": TOC[r.randrange(len(TOC))], "do": DO[r.randrange(len(DO))], "canh": CANH[r.randrange(len(CANH))],
-                   "anh_sang": ANH_SANG[r.randrange(len(ANH_SANG))], "seed": r.randrange(1, 2**31 - 1)})
+        m = {"khung": k, "goc": goc_ds[i % len(goc_ds)], "bieu_cam": bc_ds[(i * 3) % len(bc_ds)],
+             "toc": TOC[r.randrange(len(TOC))], "do": DO[r.randrange(len(DO))], "canh": CANH[r.randrange(len(CANH))],
+             "anh_sang": ANH_SANG[r.randrange(len(ANH_SANG))], "seed": r.randrange(1, 2**31 - 1)}
+        if nghieng and k == "nua" and i % 3 == 0:
+            m["hanh_dong"] = "taking a mirror selfie with a smartphone"
+            m["canh"] = "a bright bathroom with a large mirror"
+        ds.append(m)
     return ds
+
+
+def _hd(m):
+    return f"{m['hanh_dong']}, " if m.get("hanh_dong") else ""
 
 
 def cau_lenh(m, tuoi):
     return (f"RAW photo, realistic photograph of a beautiful {tuoi}-year-old adult Chinese woman, {KHUNG[m['khung']]['cau']}, "
-            f"{m['goc']}, {m['bieu_cam']}, {m['toc']}, wearing {m['do']}, in {m['canh']}, {m['anh_sang']}, "
+            f"{_hd(m)}{m['goc']}, {m['bieu_cam']}, {m['toc']}, wearing {m['do']}, in {m['canh']}, {m['anh_sang']}, "
             "natural skin texture, sharp focus, shot on Canon EOS 5D, 85mm lens, high detail")
 
 
 def chu_thich(m, trigger):
-    return (f"{trigger}, a woman, {KHUNG[m['khung']]['cau']}, {m['goc']}, {m['bieu_cam']}, {m['toc']}, "
+    return (f"{trigger}, a woman, {KHUNG[m['khung']]['cau']}, {_hd(m)}{m['goc']}, {m['bieu_cam']}, {m['toc']}, "
             f"wearing {m['do']}, in {m['canh']}, {m['anh_sang']}, photo")
 
 
@@ -163,6 +181,7 @@ def main():
     ap.add_argument("--so", type=int, default=32)
     ap.add_argument("--tuoi", type=int, default=25)
     ap.add_argument("--seed", type=int, default=20261117)
+    ap.add_argument("--nghieng", action="store_true", help="chỉ vẽ góc nghiêng / selfie gương (bổ sung bộ đã có)")
     a = ap.parse_args()
     if a.tuoi < 21:
         raise SystemExit("Nhân vật phải từ 21 tuổi.")
@@ -175,7 +194,7 @@ def main():
     if not mau.exists():
         shutil.copyfile(anh, mau)
     trigger = f"wf_{a.ten}"
-    ds = ke_hoach(a.so, a.seed)
+    ds = ke_hoach(a.so, a.seed, a.nghieng)
     (goc / "ke_hoach.json").write_text(json.dumps({"trigger": trigger, "tuoi": a.tuoi, "anh_mau": str(anh), "ds": ds},
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
     try:
